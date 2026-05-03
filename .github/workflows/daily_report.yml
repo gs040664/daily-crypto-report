@@ -6,6 +6,9 @@ on:
     - cron: '0 0 * * *'
   workflow_dispatch: # 允許在 GitHub 網頁上手動點擊執行
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   run-report-and-save:
     runs-on: ubuntu-latest

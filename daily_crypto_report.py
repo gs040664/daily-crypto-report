@@ -24,8 +24,7 @@ def get_binance_klines(symbol, interval, limit=100):
     """從幣安 API 獲取真實 K 線數據，並自動處理 GitHub Actions 的 IP 阻擋問題"""
     endpoints = [
         "https://api.binance.com/api/v3/klines",
-        "https://data-api.binance.vision/api/v3/klines",
-        "https://api.binance.us/api/v3/klines"
+        "https://data-api.binance.vision/api/v3/klines"
     ]
     
     res = None
