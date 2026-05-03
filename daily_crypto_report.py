@@ -21,11 +21,30 @@ if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
 def get_binance_klines(symbol, interval, limit=100):
-    """從幣安 API 獲取真實 K 線數據"""
-    url = "https://api.binance.com/api/v3/klines"
-    params = {"symbol": symbol, "interval": interval, "limit": limit}
-    res = requests.get(url, params=params).json()
+    """從幣安 API 獲取真實 K 線數據，並自動處理 GitHub Actions 的 IP 阻擋問題"""
+    endpoints = [
+        "https://api.binance.com/api/v3/klines",
+        "https://data-api.binance.vision/api/v3/klines",
+        "https://api.binance.us/api/v3/klines"
+    ]
     
+    res = None
+    params = {"symbol": symbol, "interval": interval, "limit": limit}
+    
+    for url in endpoints:
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            data = response.json()
+            # 幣安錯誤訊息會是 dict 格式，正常的 K 線是 list
+            if isinstance(data, list):
+                res = data
+                break
+        except Exception as e:
+            continue
+            
+    if res is None:
+        raise Exception("所有幣安 API 端點均無法存取，可能是 IP 完全被封鎖或幣種不存在。")
+        
     df = pd.DataFrame(res, columns=['time', 'open', 'high', 'low', 'close', 'volume', 'close_time', 'qav', 'num_trades', 'taker_base_vol', 'taker_quote_vol', 'ignore'])
     df['datetime'] = pd.to_datetime(df['time'], unit='ms')
     df['close'] = df['close'].astype(float)
