@@ -153,12 +153,15 @@ def send_to_discord(content):
         print("\n[提示] 尚未設定 Webhook URL，結果僅印出在終端機。")
         return
         
+    # 將 GitHub Actions 的 UTC 時間轉換為 UTC+8 (台灣時間)
+    tw_time = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+        
     payload = {
-        "content": f"🔔 **早安！激進波段分析師晨報** | {datetime.datetime.now().strftime('%Y-%m-%d %H:%00')}\n\n" + content
+        "content": f"🔔 **早安！激進波段分析師晨報** | {tw_time.strftime('%Y-%m-%d %H:%M')}\n\n" + content
     }
     try:
         requests.post(WEBHOOK_URL, json=payload, timeout=10)
-        print(f"[{datetime.datetime.now()}] Webhook 發送成功！")
+        print(f"[{tw_time.strftime('%Y-%m-%d %H:%M:%S')}] Webhook 發送成功！")
     except Exception as e:
         print(f"Webhook 發送失敗: {e}")
 
