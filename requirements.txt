@@ -1,7 +1,4 @@
 requests
 pandas
 numpy
-youtube-transcript-api
 google-generativeai
-
-yt-dlp
