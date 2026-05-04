@@ -5,6 +5,7 @@ import datetime
 import time
 import re
 from youtube_transcript_api import YouTubeTranscriptApi
+import yt_dlp
 import google.generativeai as genai
 import xml.etree.ElementTree as ET
 
@@ -125,25 +126,46 @@ def get_latest_tiabtc_video_info():
     except:
         return []
 
-def get_video_transcript(vid_list):
+def download_and_upload_video(vid_list):
     if not vid_list:
-        return "無影片 ID，無法擷取字幕。"
+        return None, "沒有找到影片 ID"
         
     for vid in vid_list:
         try:
-            transcript_list = YouTubeTranscriptApi.list_transcripts(vid)
-            try:
-                transcript = transcript_list.find_transcript(['zh-TW', 'zh-HK', 'zh', 'zh-Hans', 'zh-CN'])
-            except:
-                transcript = transcript_list.find_transcript(['en']).translate('zh-Hant')
+            url = f"https://www.youtube.com/watch?v={vid}"
+            filename = f"video_{vid}.mp4"
+            
+            # 使用 yt-dlp 下載最低畫質 (360p)，足以辨識 K 線與畫線，並能大幅加快下載與上傳速度
+            ydl_opts = {
+                'format': 'worstvideo[ext=mp4]+worstaudio[ext=m4a]/worst[ext=mp4]/worst',
+                'outtmpl': filename,
+                'quiet': True,
+                'no_warnings': True,
+            }
+            print(f"正在下載影片: {url} ...")
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
                 
-            res = transcript.fetch()
-            text = " ".join([t['text'] for t in res])
-            return text[:30000] # 找到字幕就直接回傳
-        except Exception:
+            print(f"影片下載完成，準備上傳至 Gemini (這可能需要幾分鐘)...")
+            video_file = genai.upload_file(path=filename)
+            
+            # 輪詢等待 Gemini 處理影片完成
+            print("等待 Gemini 視覺與聽覺模型處理影片...")
+            while video_file.state.name == "PROCESSING":
+                time.sleep(5)
+                video_file = genai.get_file(video_file.name)
+                
+            if video_file.state.name == "FAILED":
+                raise Exception("Gemini 影片處理失敗")
+                
+            print("Gemini 影片處理完成！可以開始分析。")
+            return video_file, ""
+            
+        except Exception as e:
+            print(f"處理影片 {vid} 時發生錯誤: {e}")
             continue
             
-    return "無法擷取近期影片字幕 (可能是最新影片尚未產生 CC 字幕，或 GitHub Actions IP 遭阻擋)。"
+    return None, "所有近期影片皆無法下載或上傳處理。"
 
 def get_macro_news():
     """抓取最新的總體經濟與國際局勢新聞標題 (CNBC RSS)"""
@@ -171,7 +193,7 @@ def get_macro_news():
         return "暫無重大國際總經新聞"
     return "\n\n".join(news_items)
 
-def generate_ai_report(ta_string, transcript_text, macro_news_str, video_url):
+def generate_ai_report(ta_string, video_file, macro_news_str):
     if not GEMINI_API_KEY:
         return "⚠️ 未設定 GEMINI_API_KEY，請至 GitHub Secrets 設定。\n\n" + ta_string
         
@@ -223,11 +245,11 @@ def generate_ai_report(ta_string, transcript_text, macro_news_str, video_url):
 【資料一：幣安 4H 級別即時技術數據 (過去40天)】
 {ta_string}
 
-【資料二：YouTuber (提阿非羅大人 TiaBTC) 最新盤勢分析影片字幕】
-{transcript_text}
-
-【資料三：最新美國經濟與國際局勢新聞 (CNBC)】
+【資料二：最新美國經濟與國際局勢新聞 (CNBC)】
 {macro_news_str}
+
+【資料三：YouTuber (TiaBTC) 最新盤勢分析影片】
+{'這份指令已經附帶了 TiaBTC 最新的影片檔案！請直接觀看影片，觀察他在圖表上畫的線、指出的型態，並結合他口述的觀點。' if video_file else '今日因技術問題無影片可供參考。'}
 
 請融合以上資料，嚴格按照上述的分析角度與我的交易風格，撰寫一份「極度精簡且具備高實戰價值」的 Markdown 格式 Discord 晨報：
 1. 【宏觀定調】：一句話結合「國際經濟局勢」與「技術面」，定調今天的市場總結。
@@ -235,11 +257,15 @@ def generate_ai_report(ta_string, transcript_text, macro_news_str, video_url):
    - **現價**: 直接標註於幣種名稱旁。
    - **趨勢與型態**: 用一句話總結目前的盤面強弱與型態結構。絕對不要羅列生硬的技術數據！除非某個數據是支撐你策略的「前三大核心依據」(例如： POC 剛好形成強支撐、或 RSI 出現嚴重背離)，否則一律省略不講。
    - **行動指南**: 直接給出『建議入場價位與必須確認的價格行為』、『預期止盈與止損價位』、『高機率劇本』。
-3. 【TiaBTC 觀點速遞】：請用 1-3 點條列式，極度精簡地總結 TiaBTC 最新影片中的核心盤勢重點，作為額外的參考。不需要附上影片網址。
+3. 【TiaBTC 觀點速遞】：請用語音與視覺分析，用 1-3 點條列式，極度精簡地總結 TiaBTC 影片中的核心盤勢重點 (例如他在哪裡畫了壓力線)。
 4. 語氣果斷專業、像個身經百戰的操盤手。直接輸出純文本，不要加上 ``` 區塊包裝，總字數控制在 1500 字以內。
 """
         model = genai.GenerativeModel(model_name)
-        response = model.generate_content(prompt)
+        content_payload = [prompt]
+        if video_file:
+            content_payload.append(video_file)
+            
+        response = model.generate_content(content_payload)
         
         return response.text
     except Exception as e:
@@ -278,9 +304,8 @@ if __name__ == "__main__":
             ta_full_string += f"[{sym}] 讀取失敗: {e}\n\n"
             
     vids = get_latest_tiabtc_video_info()
-    transcript = get_video_transcript(vids)
+    video_file, err = download_and_upload_video(vids)
     macro_news = get_macro_news()
     
-    # 由於我們不再附上影片連結，隨便傳一個空字串即可
-    final_report = generate_ai_report(ta_full_string, transcript, macro_news, "")
+    final_report = generate_ai_report(ta_full_string, video_file, macro_news)
     send_to_discord(final_report)
