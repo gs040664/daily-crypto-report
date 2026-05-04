@@ -245,10 +245,22 @@ def send_to_discord(content):
         return
         
     tw_time = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-    payload = {
-        "content": f"🔔 **早安！AI 激進波段分析師晨報** | {tw_time.strftime('%Y-%m-%d %H:%M')}\n\n" + content
-    }
-    requests.post(WEBHOOK_URL, json=payload, timeout=10)
+    full_msg = f"🔔 **早安！AI 激進波段分析師晨報** | {tw_time.strftime('%Y-%m-%d %H:%M')}\n\n" + content
+    
+    # Discord 單則訊息字數上限為 2000 字元，需分段發送
+    chunks = [full_msg[i:i+1900] for i in range(0, len(full_msg), 1900)]
+    
+    for i, chunk in enumerate(chunks):
+        payload = {"content": chunk}
+        try:
+            res = requests.post(WEBHOOK_URL, json=payload, timeout=10)
+            if res.status_code >= 400:
+                print(f"Webhook 發送失敗 (HTTP {res.status_code}): {res.text}")
+            else:
+                print(f"第 {i+1}/{len(chunks)} 段訊息發送成功！")
+            time.sleep(1) # 避免觸發 Discord 速率限制
+        except Exception as e:
+            print(f"網路連線發送失敗: {e}")
 
 if __name__ == "__main__":
     ta_full_string = ""
