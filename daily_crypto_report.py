@@ -93,6 +93,12 @@ def get_ta_raw_data(symbol):
     vol_avg = df['volume'].rolling(20).mean().iloc[-1]
     vol_ratio = current['volume'] / vol_avg if vol_avg > 0 else 1
     
+    # 計算交易密集區間 (Point of Control - 近期最大籌碼換手區)
+    bins = pd.cut(df['close'], bins=20)
+    vp = df.groupby(bins, observed=False)['volume'].sum()
+    poc_bin = vp.idxmax()
+    poc_price = poc_bin.mid
+    
     data_str = (
         f"[{symbol}]\n"
         f"現價: {price:.4f}\n"
@@ -100,6 +106,7 @@ def get_ta_raw_data(symbol):
         f"RSI(14): {rsi:.1f}\n"
         f"MACD柱狀圖: {macd_hist:.4f}\n"
         f"當前量能對比均量: {vol_ratio:.2f}倍\n"
+        f"交易密集區間 (POC): 約 {poc_price:.4f}\n"
     )
     return data_str
 
@@ -169,10 +176,24 @@ def generate_ai_report(ta_string, transcript_text, macro_news_str, video_url):
         model = genai.GenerativeModel('gemini-1.5-flash')
         
         prompt = f"""
-你是一位專業的「加密貨幣技術分析師」，交易風格為「波段/趨勢」，重視「技術面/籌碼」，風險偏好為「激進」。
-你需要產出一份精煉、硬核的 Discord 每日晨報。
+請扮演一位專業技術分析師。每天固定從trading view (或幣安) 上撈取BTC ETH SOL BNB ADA k線數據，並從以下角度分析：
+1. 趨勢方向
+2. 支撐與壓力
+3. 成交量變化
+4. RSI / MACD / 均線 / 交易密集區間(可能是阻力或支撐)
+5. 型態結構
+6. 是否有主力吸籌或出貨跡象
+7. 現在偏向突破、假突破、反轉還是整理
+最後請給出：『目前盤面強弱』『關鍵價位』『高機率劇本』。
 
-【資料一：幣安 4H 級別即時技術數據】
+我的交易市場：［加密貨幣市場］
+我的交易風格：［波段 / 趨勢］
+我重視的東西：［技術面 / 籌碼 ］
+我常用的指標：［RSI / MACD / EMA / 成交量 / 交易密集區間］
+我的風險偏好：［激進］
+加密貨幣市場也跟全球經濟有關係，美國的經濟消息預測還有國際局勢也要加進分析要素裡面。
+
+【資料一：幣安 4H 級別即時技術數據 (過去40天)】
 {ta_string}
 
 【資料二：YouTuber (提阿非羅大人 TiaBTC) 最新盤勢分析影片字幕】
@@ -181,13 +202,11 @@ def generate_ai_report(ta_string, transcript_text, macro_news_str, video_url):
 【資料三：最新美國經濟與國際局勢新聞 (CNBC)】
 {macro_news_str}
 
-請融合以上三份資料，撰寫報告：
+請融合以上資料，嚴格按照上述的分析角度與我的交易風格，撰寫一份 Markdown 格式的 Discord 晨報：
 1. 【宏觀定調】：一句話結合「國際經濟局勢」與「技術面」，定調今天的市場總結。
-2. 逐一分析 5 個幣種 (BTC, ETH, SOL, BNB, ADA)：
-   - 將「客觀的均線與指標」結合「TiaBTC 的主觀觀點（如果有提到的話）」。
-   - 明確給出【行動指南】：包含『目前盤面強弱』、『關鍵價位(支撐/壓力)』、『高機率劇本』。
+2. 逐一分析 5 個幣種，並必須融合 TiaBTC 的觀點。
 3. 文末附上參考影片連結：{video_url}
-4. 語氣果斷專業，不要模稜兩可。不需要 Markdown 的 ``` 區塊包裝，直接輸出文字即可。
+4. 語氣果斷專業。直接輸出純文本，不要加上 ``` 區塊包裝。
 """
         # 加入模型自動降級與重試機制
         try:
