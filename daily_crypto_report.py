@@ -225,12 +225,33 @@ def generate_ai_report(ta_string, ct_analysis_str, macro_news_str):
             # 嘗試使用內建的 Google 搜尋功能 (Grounding)
             print("嘗試啟用 Gemini Google 搜尋引擎...")
             model = genai.GenerativeModel(model_name, tools='google_search_retrieval')
-            response = model.generate_content(prompt)
+            
+            for retry in range(3):
+                try:
+                    response = model.generate_content(prompt)
+                    break
+                except Exception as e:
+                    if "429" in str(e) or "quota" in str(e).lower():
+                        print(f"⚠️ 觸發 429 速率限制，等待 42 秒後自動重試 (第 {retry+1} 次/共 3 次)...")
+                        time.sleep(42)
+                    else:
+                        raise e
+                        
         except Exception as search_err:
             print(f"無法啟用 Google 搜尋工具 ({search_err})，退回無搜尋模式...")
             model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
             
+            for retry in range(3):
+                try:
+                    response = model.generate_content(prompt)
+                    break
+                except Exception as e:
+                    if "429" in str(e) or "quota" in str(e).lower():
+                        print(f"⚠️ 觸發 429 速率限制，等待 42 秒後自動重試 (第 {retry+1} 次/共 3 次)...")
+                        time.sleep(42)
+                    else:
+                        raise e
+                        
         return response.text
     except Exception as e:
         return f"⚠️ AI 生成失敗 ({e})\n\n純技術數據：\n{ta_string}"
