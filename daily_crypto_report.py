@@ -159,7 +159,18 @@ def generate_ai_report(ta_string, transcript_text, video_url):
 3. 文末附上參考影片連結：{video_url}
 4. 語氣果斷專業，不要模稜兩可。不需要 Markdown 的 ``` 區塊包裝，直接輸出文字即可。
 """
-        response = model.generate_content(prompt)
+        # 加入模型自動降級與重試機制
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            response = model.generate_content(prompt)
+        except Exception as inner_e:
+            if "404" in str(inner_e):
+                print("gemini-1.5-flash-latest 找不到，降級使用 gemini-pro...")
+                model = genai.GenerativeModel('gemini-pro')
+                response = model.generate_content(prompt)
+            else:
+                raise inner_e
+                
         return response.text
     except Exception as e:
         return f"⚠️ AI 生成失敗 ({e})\n\n純技術數據：\n{ta_string}"
