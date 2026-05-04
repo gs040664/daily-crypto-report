@@ -148,8 +148,11 @@ def get_cointelegraph_analysis():
         print(f"Cointelegraph 讀取失敗: {e}")
         return "暫無最新機構分析"
 
-def get_tiabtc_transcript():
-    """嘗試獲取 TiaBTC 最新影片的字幕。若無字幕則回傳空字串。"""
+def get_tiabtc_transcripts():
+    """獲取 TiaBTC 最新影片字幕與前 5 支影片整合字幕"""
+    latest_transcript = ""
+    top5_combined = []
+    
     try:
         url = "https://www.youtube.com/feeds/videos.xml?channel_id=UCy2h-yNK9OF1kXDtT3AlF3Q"
         headers = {'User-Agent': 'Mozilla/5.0'}
@@ -158,28 +161,34 @@ def get_tiabtc_transcript():
         
         ns = {'yt': 'http://www.youtube.com/xml/schemas/2015', 'atom': 'http://www.w3.org/2005/Atom'}
         vids = []
-        for entry in root.findall('atom:entry', ns)[:3]:
+        for entry in root.findall('atom:entry', ns)[:5]:
             vid_elem = entry.find('yt:videoId', ns)
+            title_elem = entry.find('atom:title', ns)
+            title = title_elem.text if title_elem is not None else "未知影片"
             if vid_elem is not None and vid_elem.text:
-                vids.append(vid_elem.text)
+                vids.append((vid_elem.text, title))
                 
-        for vid in vids:
+        for i, (vid, title) in enumerate(vids):
             try:
                 transcript_list = YouTubeTranscriptApi.list_transcripts(vid)
                 transcript = next(iter(transcript_list))
                 if 'zh' not in transcript.language_code:
                     transcript = transcript.translate('zh-Hant')
-                res = transcript.fetch()
-                text = " ".join([t['text'] for t in res])
-                print(f"字幕抓取成功 ({vid})！語言: {transcript.language_code}")
-                return text[:25000]
+                res_data = transcript.fetch()
+                text = " ".join([t['text'] for t in res_data])
+                
+                if i == 0:
+                    latest_transcript = text[:25000]
+                    
+                top5_combined.append(f"影片：{title}\n字幕摘要：{text[:4500]}")
+                print(f"影片字幕抓取成功 ({vid})！語言: {transcript.language_code}")
             except Exception as e:
-                print(f"字幕抓取失敗 ({vid}): {e}")
+                print(f"影片字幕抓取失敗 ({vid}): {e}")
                 continue
     except Exception as e:
         print(f"取得頻道 RSS 失敗: {e}")
         
-    return ""
+    return latest_transcript, "\n\n".join(top5_combined)
 
 def get_macro_news():
     """抓取最新的總體經濟與國際局勢新聞標題 (CNBC RSS)"""
@@ -207,13 +216,13 @@ def get_macro_news():
         return "暫無重大國際總經新聞"
     return "\n\n".join(news_items)
 
-def generate_ai_report(ta_string, ct_analysis_str, transcript_text, macro_news_str):
+def generate_ai_report(ta_string, ct_analysis_str, latest_transcript, top5_transcripts, macro_news_str):
     if not GEMINI_API_KEY:
         return "⚠️ 未設定 GEMINI_API_KEY，請至 GitHub Secrets 設定。\n\n" + ta_string
         
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        # 動態尋找可用的模型 (解決 404 找不到模型或版本更迭的問題)
+        # 動態尋找可用的模型
         available_models = []
         for m in genai.list_models():
             if 'generateContent' in m.supported_generation_methods:
@@ -222,7 +231,6 @@ def generate_ai_report(ta_string, ct_analysis_str, transcript_text, macro_news_s
         if not available_models:
             raise Exception("你的 API Key 沒有權限使用任何支援生成的模型。")
             
-        # 優先尋找 flash 或 pro
         target_model = None
         for m in available_models:
             if 'flash' in m.lower():
@@ -236,16 +244,26 @@ def generate_ai_report(ta_string, ct_analysis_str, transcript_text, macro_news_s
         if not target_model:
             target_model = available_models[0]
             
-        # GenerativeModel 參數通常不需要 "models/" 前綴
         model_name = target_model.replace("models/", "")
         
-        if transcript_text:
-            tiabtc_source = f"【資料四：TiaBTC 最新影片字幕】\n{transcript_text}"
-            task_prompt = "請優先根據這份字幕提取 TiaBTC 最新影片的分析重點。如果有字幕，請以字幕為主。"
+        # 依照優先順位組織 TiaBTC 資訊
+        tiabtc_sources = []
+        if latest_transcript:
+            tiabtc_sources.append(f"【優先順位 1：TiaBTC 最新影片字幕】\n{latest_transcript}")
+            task_prompt = "請優先根據【優先順位 1：TiaBTC 最新影片字幕】提取重點。若有需要，再結合【優先順位 3：前 5 支影片整合字幕】進行精準推斷。"
+            use_search = False
         else:
-            tiabtc_source = ""
-            task_prompt = "因為今天無法擷取到 TiaBTC 影片字幕，我已為你啟動了 Google 聯網搜尋引擎！請立刻搜尋「TiaBTC 最新分析」獲取他過去 24 小時的最新觀點。"
+            tiabtc_sources.append("【優先順位 1：無】無最新影片字幕，請改用優先順位 2。")
+            task_prompt = "今日無法擷取最新影片字幕，請根據【優先順位 2】在網路上聯網搜尋『TiaBTC 最新影片分析 提阿非羅大人』。另外若有【優先順位 3：前 5 支影片整合字幕】，請一併綜合提取。"
+            use_search = True
             
+        if top5_transcripts:
+            tiabtc_sources.append(f"【優先順位 3：TiaBTC 前 5 支影片整合字幕】\n{top5_transcripts}")
+        else:
+            tiabtc_sources.append("【優先順位 3：無】無前 5 支影片整合字幕。")
+            
+        tiabtc_source_str = "\n\n".join(tiabtc_sources)
+        
         prompt = f"""
 請扮演一位專業技術分析師。每天固定從trading view (或幣安) 上撈取BTC ETH SOL BNB ADA k線與合約資金費率數據，並從以下角度進行嚴格判斷：
 1. 趨勢方向與型態結構
@@ -269,7 +287,7 @@ def generate_ai_report(ta_string, ct_analysis_str, transcript_text, macro_news_s
 【資料三：全球頂級機構與分析師觀點 (Cointelegraph)】
 {ct_analysis_str}
 
-{tiabtc_source}
+{tiabtc_source_str}
 
 【特別任務：整合 TiaBTC 觀點】
 {task_prompt}
@@ -285,51 +303,24 @@ def generate_ai_report(ta_string, ct_analysis_str, transcript_text, macro_news_s
 3. 【TiaBTC 觀點速遞】：請優先以 TiaBTC 的觀點（無論是字幕提供、或是你搜尋到的分析）進行 1-3 點條列式精簡總結。若有必要，再將 Cointelegraph 的頂級機構觀點作為背景與補充。
 4. 語氣果斷專業、像個身經百戰的操盤手。直接輸出純文本，不要加上 ``` 區塊包裝，總字數控制在 1500 字以內。
 """
-        use_search = False if transcript_text else True
         try:
             if use_search:
                 print("嘗試啟用 Gemini Google 搜尋引擎...")
-                model = genai.GenerativeModel(model_name, tools='google_search_retrieval')
+                try:
+                    model = genai.GenerativeModel(model_name, tools='google_search_retrieval')
+                    response = model.generate_content(prompt)
+                except Exception as search_err:
+                    print(f"無法啟用 Google 搜尋工具 ({search_err})，退回無搜尋模式...")
+                    model = genai.GenerativeModel(model_name)
+                    response = model.generate_content(prompt)
             else:
                 print("使用已擷取的字幕數據，停用搜尋引擎以節省 Quota...")
                 model = genai.GenerativeModel(model_name)
-            
-            response = None
-            for retry in range(2):
-                try:
-                    response = model.generate_content(prompt)
-                    break
-                except Exception as e:
-                    if "429" in str(e) or "quota" in str(e).lower():
-                        print(f"⚠️ 觸發 429 速率限制，等待 31 秒後自動重試 (第 {retry+1} 次/共 2 次)...")
-                        time.sleep(31)
-                    else:
-                        raise e
-            if response is None:
-                raise Exception("重試 2 次速率限制後依然無法取得回應")
-                        
-        except Exception as search_err:
-            if use_search:
-                print(f"無法啟用 Google 搜尋工具 ({search_err})，退回無搜尋模式...")
-                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(prompt)
                 
-                response = None
-                for retry in range(2):
-                    try:
-                        response = model.generate_content(prompt)
-                        break
-                    except Exception as e:
-                        if "429" in str(e) or "quota" in str(e).lower():
-                            print(f"⚠️ 觸發 429 速率限制，等待 31 秒後自動重試 (第 {retry+1} 次/共 2 次)...")
-                            time.sleep(31)
-                        else:
-                            raise e
-                if response is None:
-                    raise Exception("無搜尋模式重試 2 次速率限制後依然無法取得回應")
-            else:
-                raise search_err
-                        
-        return response.text
+            return response.text
+        except Exception as e:
+            raise e
     except Exception as e:
         return (
             f"⚠️ **AI 核心服務暫時受限**\n"
@@ -371,8 +362,8 @@ if __name__ == "__main__":
             ta_full_string += f"[{sym}] 讀取失敗: {e}\n\n"
             
     ct_analysis = get_cointelegraph_analysis()
-    tiabtc_transcript = get_tiabtc_transcript()
+    latest_transcript, top5_transcripts = get_tiabtc_transcripts()
     macro_news = get_macro_news()
     
-    final_report = generate_ai_report(ta_full_string, ct_analysis, tiabtc_transcript, macro_news)
+    final_report = generate_ai_report(ta_full_string, ct_analysis, latest_transcript, top5_transcripts, macro_news)
     send_to_discord(final_report)
