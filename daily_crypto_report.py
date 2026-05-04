@@ -173,8 +173,31 @@ def generate_ai_report(ta_string, transcript_text, macro_news_str, video_url):
         
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        
+        # 動態尋找可用的模型 (解決 404 找不到模型或版本更迭的問題)
+        available_models = []
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                available_models.append(m.name)
+                
+        if not available_models:
+            raise Exception("你的 API Key 沒有權限使用任何支援生成的模型。")
+            
+        # 優先尋找 flash 或 pro
+        target_model = None
+        for m in available_models:
+            if 'flash' in m.lower():
+                target_model = m
+                break
+        if not target_model:
+            for m in available_models:
+                if 'pro' in m.lower():
+                    target_model = m
+                    break
+        if not target_model:
+            target_model = available_models[0]
+            
+        # GenerativeModel 參數通常不需要 "models/" 前綴
+        model_name = target_model.replace("models/", "")
         prompt = f"""
 請扮演一位專業技術分析師。每天固定從trading view (或幣安) 上撈取BTC ETH SOL BNB ADA k線數據，並從以下角度分析：
 1. 趨勢方向
@@ -209,18 +232,9 @@ def generate_ai_report(ta_string, transcript_text, macro_news_str, video_url):
 3. 文末附上參考影片連結：{video_url}
 4. 語氣果斷專業。直接輸出純文本，不要加上 ``` 區塊包裝。
 """
-        # 加入模型自動降級與重試機制
-        try:
-            model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            response = model.generate_content(prompt)
-        except Exception as inner_e:
-            if "404" in str(inner_e):
-                print("gemini-1.5-flash-latest 找不到，降級使用 gemini-pro...")
-                model = genai.GenerativeModel('gemini-pro')
-                response = model.generate_content(prompt)
-            else:
-                raise inner_e
-                
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content(prompt)
+        
         return response.text
     except Exception as e:
         return f"⚠️ AI 生成失敗 ({e})\n\n純技術數據：\n{ta_string}"
