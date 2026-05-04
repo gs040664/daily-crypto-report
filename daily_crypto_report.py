@@ -6,6 +6,7 @@ import time
 import re
 from youtube_transcript_api import YouTubeTranscriptApi
 import google.generativeai as genai
+import xml.etree.ElementTree as ET
 
 # ==========================================
 # 💎 激進波段分析師 - 每日晨報機器人 (AI 升級版)
@@ -133,7 +134,33 @@ def get_video_transcript(video_id):
     except Exception as e:
         return f"無法擷取影片字幕 (可能無 CC 字幕)。錯誤: {e}"
 
-def generate_ai_report(ta_string, transcript_text, video_url):
+def get_macro_news():
+    """抓取最新的總體經濟與國際局勢新聞標題 (CNBC RSS)"""
+    urls = [
+        "https://search.cnbc.com/rs/search/combinedcms/view.xml?id=10000664", # Economy
+        "https://search.cnbc.com/rs/search/combinedcms/view.xml?id=100727362" # World
+    ]
+    news_items = []
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    
+    for url in urls:
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+            root = ET.fromstring(res.content)
+            for item in root.findall('./channel/item')[:3]:
+                title = item.find('title').text if item.find('title') is not None else ""
+                desc = item.find('description').text if item.find('description') is not None else ""
+                desc = re.sub(r'<[^>]+>', '', desc) # 移除 HTML tags
+                if title:
+                    news_items.append(f"標題: {title}\n摘要: {desc}")
+        except:
+            continue
+            
+    if not news_items:
+        return "暫無重大國際總經新聞"
+    return "\n\n".join(news_items)
+
+def generate_ai_report(ta_string, transcript_text, macro_news_str, video_url):
     if not GEMINI_API_KEY:
         return "⚠️ 未設定 GEMINI_API_KEY，請至 GitHub Secrets 設定。\n\n" + ta_string
         
@@ -151,8 +178,11 @@ def generate_ai_report(ta_string, transcript_text, video_url):
 【資料二：YouTuber (提阿非羅大人 TiaBTC) 最新盤勢分析影片字幕】
 {transcript_text}
 
-請融合這兩份資料，撰寫報告：
-1. 簡短問候並用一句話定調今天的市場總結。
+【資料三：最新美國經濟與國際局勢新聞 (CNBC)】
+{macro_news_str}
+
+請融合以上三份資料，撰寫報告：
+1. 【宏觀定調】：一句話結合「國際經濟局勢」與「技術面」，定調今天的市場總結。
 2. 逐一分析 5 個幣種 (BTC, ETH, SOL, BNB, ADA)：
    - 將「客觀的均線與指標」結合「TiaBTC 的主觀觀點（如果有提到的話）」。
    - 明確給出【行動指南】：包含『目前盤面強弱』、『關鍵價位(支撐/壓力)』、『高機率劇本』。
@@ -197,6 +227,7 @@ if __name__ == "__main__":
             
     vid, v_url = get_latest_tiabtc_video_info()
     transcript = get_video_transcript(vid)
+    macro_news = get_macro_news()
     
-    final_report = generate_ai_report(ta_full_string, transcript, v_url)
+    final_report = generate_ai_report(ta_full_string, transcript, macro_news, v_url)
     send_to_discord(final_report)
