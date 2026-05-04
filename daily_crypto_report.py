@@ -112,45 +112,53 @@ def get_ta_raw_data(symbol):
     return data_str
 
 def get_latest_tiabtc_video_info():
-    """回傳最新的前 5 個影片 ID 列表"""
+    """回傳最新的前 5 個影片 ID 列表 (透過 RSS 確保不被擋)"""
     try:
-        url = "https://www.youtube.com/@tiabtc/videos"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
-        html = requests.get(url, headers=headers, timeout=10).text
-        vids = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
-        unique_vids = []
-        for v in vids:
-            if v not in unique_vids:
-                unique_vids.append(v)
-        return unique_vids[:5]
-    except:
+        url = "https://www.youtube.com/feeds/videos.xml?channel_id=UCkMhW4j57j3mKzH1t-Z9m4g"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(url, headers=headers, timeout=10)
+        root = ET.fromstring(res.content)
+        
+        ns = {'yt': 'http://www.youtube.com/xml/schemas/2015', 'atom': 'http://www.w3.org/2005/Atom'}
+        vids = []
+        for entry in root.findall('atom:entry', ns)[:5]:
+            vid_elem = entry.find('yt:videoId', ns)
+            if vid_elem is not None and vid_elem.text:
+                vids.append(vid_elem.text)
+                
+        return vids
+    except Exception as e:
+        print(f"取得頻道 RSS 失敗: {e}")
         return []
 
-def download_and_upload_video(vid_list):
+def get_video_content(vid_list):
+    """
+    先嘗試透過 yt-dlp 下載實體影片供 Gemini 進行視覺與聽覺分析。
+    若 GitHub Actions IP 遭 YouTube 阻擋下載，則降級使用字幕 API 抓取文字。
+    回傳: (video_file_object, transcript_text_string) 只能有其中一個有值。
+    """
     if not vid_list:
-        return None, "沒有找到影片 ID"
+        return None, ""
         
     for vid in vid_list:
+        url = f"https://www.youtube.com/watch?v={vid}"
+        filename = f"video_{vid}.mp4"
+        
+        # 策略 A: 嘗試下載實體影片
         try:
-            url = f"https://www.youtube.com/watch?v={vid}"
-            filename = f"video_{vid}.mp4"
-            
-            # 使用 yt-dlp 下載最低畫質 (360p)，足以辨識 K 線與畫線，並能大幅加快下載與上傳速度
             ydl_opts = {
-                'format': 'worstvideo[ext=mp4]+worstaudio[ext=m4a]/worst[ext=mp4]/worst',
+                'format': 'worst[ext=mp4]', # 最簡單的單檔 mp4 避免合併錯誤
                 'outtmpl': filename,
                 'quiet': True,
                 'no_warnings': True,
             }
-            print(f"正在下載影片: {url} ...")
+            print(f"嘗試下載實體影片 {url} ...")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ydl.download([url])
                 
-            print(f"影片下載完成，準備上傳至 Gemini (這可能需要幾分鐘)...")
+            print(f"影片下載成功，上傳至 Gemini...")
             video_file = genai.upload_file(path=filename)
             
-            # 輪詢等待 Gemini 處理影片完成
-            print("等待 Gemini 視覺與聽覺模型處理影片...")
             while video_file.state.name == "PROCESSING":
                 time.sleep(5)
                 video_file = genai.get_file(video_file.name)
@@ -158,14 +166,30 @@ def download_and_upload_video(vid_list):
             if video_file.state.name == "FAILED":
                 raise Exception("Gemini 影片處理失敗")
                 
-            print("Gemini 影片處理完成！可以開始分析。")
+            print("Gemini 影片處理完成！")
             return video_file, ""
             
         except Exception as e:
-            print(f"處理影片 {vid} 時發生錯誤: {e}")
+            print(f"下載或上傳影片 {vid} 失敗 ({e})，切換為抓取字幕模式...")
+            
+        # 策略 B: 若下載被擋，嘗試抓取字幕
+        try:
+            transcript_list = YouTubeTranscriptApi.list_transcripts(vid)
+            try:
+                transcript = transcript_list.find_transcript(['zh-TW', 'zh-HK', 'zh', 'zh-Hans', 'zh-CN'])
+            except:
+                transcript = transcript_list.find_transcript(['en']).translate('zh-Hant')
+                
+            res = transcript.fetch()
+            text = " ".join([t['text'] for t in res])
+            print(f"字幕抓取成功 ({vid})！")
+            return None, text[:30000]
+            
+        except Exception as e:
+            print(f"字幕抓取失敗 ({vid}): {e}")
             continue
             
-    return None, "所有近期影片皆無法下載或上傳處理。"
+    return None, ""
 
 def get_macro_news():
     """抓取最新的總體經濟與國際局勢新聞標題 (CNBC RSS)"""
@@ -193,7 +217,7 @@ def get_macro_news():
         return "暫無重大國際總經新聞"
     return "\n\n".join(news_items)
 
-def generate_ai_report(ta_string, video_file, macro_news_str):
+def generate_ai_report(ta_string, video_file, transcript_text, macro_news_str):
     if not GEMINI_API_KEY:
         return "⚠️ 未設定 GEMINI_API_KEY，請至 GitHub Secrets 設定。\n\n" + ta_string
         
@@ -224,6 +248,14 @@ def generate_ai_report(ta_string, video_file, macro_news_str):
             
         # GenerativeModel 參數通常不需要 "models/" 前綴
         model_name = target_model.replace("models/", "")
+        # 動態決定影片提示詞
+        if video_file:
+            video_prompt = "這份指令已經附帶了 TiaBTC 最新的影片檔案！請直接觀看影片，觀察他在圖表上畫的線、指出的型態，並結合他口述的觀點。"
+        elif transcript_text:
+            video_prompt = f"以下是 TiaBTC 最新影片的語音字幕，請根據他口述的內容總結他的觀點：\n{transcript_text}"
+        else:
+            video_prompt = "今日因技術問題無影片與字幕可供參考。"
+            
         prompt = f"""
 請扮演一位專業技術分析師。每天固定從trading view (或幣安) 上撈取BTC ETH SOL BNB ADA k線數據，並從以下角度進行嚴格判斷：
 1. 趨勢方向與型態結構
@@ -244,7 +276,7 @@ def generate_ai_report(ta_string, video_file, macro_news_str):
 {macro_news_str}
 
 【資料三：YouTuber (TiaBTC) 最新盤勢分析影片】
-{'這份指令已經附帶了 TiaBTC 最新的影片檔案！請直接觀看影片，觀察他在圖表上畫的線、指出的型態，並結合他口述的觀點。' if video_file else '今日因技術問題無影片可供參考。'}
+{video_prompt}
 
 請融合以上資料，嚴格按照上述的分析角度與我的交易風格，撰寫一份「極度精簡且具備高實戰價值」的 Markdown 格式 Discord 晨報：
 1. 【宏觀定調】：一句話結合「國際經濟局勢」與「技術面」，定調今天的市場總結。
@@ -299,8 +331,8 @@ if __name__ == "__main__":
             ta_full_string += f"[{sym}] 讀取失敗: {e}\n\n"
             
     vids = get_latest_tiabtc_video_info()
-    video_file, err = download_and_upload_video(vids)
+    video_file, transcript = get_video_content(vids)
     macro_news = get_macro_news()
     
-    final_report = generate_ai_report(ta_full_string, video_file, macro_news)
+    final_report = generate_ai_report(ta_full_string, video_file, transcript, macro_news)
     send_to_discord(final_report)
