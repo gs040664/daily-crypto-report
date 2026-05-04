@@ -175,14 +175,16 @@ def get_video_content(vid_list):
         # 策略 B: 若下載被擋，嘗試抓取字幕
         try:
             transcript_list = YouTubeTranscriptApi.list_transcripts(vid)
-            try:
-                transcript = transcript_list.find_transcript(['zh-TW', 'zh-HK', 'zh', 'zh-Hans', 'zh-CN'])
-            except:
-                transcript = transcript_list.find_transcript(['en']).translate('zh-Hant')
+            # 抓取清單上的第一個可用字幕，不再猜測語言代碼，避免因為 auto-generated (如 a.zh) 而報錯
+            transcript = next(iter(transcript_list))
+            
+            # 如果抓到的字幕不是中文體系，自動翻譯成繁體中文
+            if 'zh' not in transcript.language_code:
+                transcript = transcript.translate('zh-Hant')
                 
             res = transcript.fetch()
             text = " ".join([t['text'] for t in res])
-            print(f"字幕抓取成功 ({vid})！")
+            print(f"字幕抓取成功 ({vid})！語言: {transcript.language_code}")
             return None, text[:30000]
             
         except Exception as e:
