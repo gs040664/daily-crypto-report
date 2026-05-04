@@ -226,6 +226,7 @@ def generate_ai_report(ta_string, ct_analysis_str, macro_news_str):
             print("嘗試啟用 Gemini Google 搜尋引擎...")
             model = genai.GenerativeModel(model_name, tools='google_search_retrieval')
             
+            response = None
             for retry in range(3):
                 try:
                     response = model.generate_content(prompt)
@@ -236,11 +237,14 @@ def generate_ai_report(ta_string, ct_analysis_str, macro_news_str):
                         time.sleep(42)
                     else:
                         raise e
+            if response is None:
+                raise Exception("重試 3 次速率限制後依然無法取得回應")
                         
         except Exception as search_err:
             print(f"無法啟用 Google 搜尋工具 ({search_err})，退回無搜尋模式...")
             model = genai.GenerativeModel(model_name)
             
+            response = None
             for retry in range(3):
                 try:
                     response = model.generate_content(prompt)
@@ -251,6 +255,8 @@ def generate_ai_report(ta_string, ct_analysis_str, macro_news_str):
                         time.sleep(42)
                     else:
                         raise e
+            if response is None:
+                raise Exception("無搜尋模式重試 3 次速率限制後依然無法取得回應")
                         
         return response.text
     except Exception as e:
