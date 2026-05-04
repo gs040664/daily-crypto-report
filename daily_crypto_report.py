@@ -78,6 +78,18 @@ def save_data_to_csv(symbol, df):
         combined_df = save_df
     combined_df.to_csv(file_path, index=False)
 
+def get_binance_funding_rate(symbol):
+    """獲取幣安合約即時資金費率 (Funding Rate)"""
+    url = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol}"
+    try:
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        if isinstance(data, dict) and 'lastFundingRate' in data:
+            return float(data['lastFundingRate'])
+    except Exception as e:
+        print(f"無法取得 {symbol} 資金費率: {e}")
+    return None
+
 def get_ta_raw_data(symbol):
     """獲取純技術指標字串，供 LLM 分析用"""
     df = get_binance_klines(symbol, INTERVAL)
@@ -99,6 +111,10 @@ def get_ta_raw_data(symbol):
     poc_bin = vp.idxmax()
     poc_price = poc_bin.mid
     
+    # 新增資金費率
+    funding_rate = get_binance_funding_rate(symbol)
+    funding_str = f"{funding_rate * 100:.4f}%" if funding_rate is not None else "暫無資料"
+    
     data_str = (
         f"[{symbol}]\n"
         f"現價: {price:.4f}\n"
@@ -107,6 +123,7 @@ def get_ta_raw_data(symbol):
         f"MACD柱狀圖: {macd_hist:.4f}\n"
         f"當前量能對比均量: {vol_ratio:.2f}倍\n"
         f"交易密集區間 (POC): 約 {poc_price:.4f}\n"
+        f"即時資金費率 (Funding Rate): {funding_str}\n"
     )
     return data_str
 
@@ -230,11 +247,12 @@ def generate_ai_report(ta_string, ct_analysis_str, transcript_text, macro_news_s
             task_prompt = "因為今天無法擷取到 TiaBTC 影片字幕，我已為你啟動了 Google 聯網搜尋引擎！請立刻搜尋「TiaBTC 最新分析」獲取他過去 24 小時的最新觀點。"
             
         prompt = f"""
-請扮演一位專業技術分析師。每天固定從trading view (或幣安) 上撈取BTC ETH SOL BNB ADA k線數據，並從以下角度進行嚴格判斷：
+請扮演一位專業技術分析師。每天固定從trading view (或幣安) 上撈取BTC ETH SOL BNB ADA k線與合約資金費率數據，並從以下角度進行嚴格判斷：
 1. 趨勢方向與型態結構
 2. 支撐與壓力 (特別留意交易密集區間 POC)
 3. 成交量變化與主力動向
-4. 現在偏向突破、假突破、反轉還是整理
+4. 資金費率 (Funding Rate) 的變化：資金費率代表多空雙方的擁擠程度與情緒！當資金費率異常偏高或偏低時，代表出現了擁擠交易。請提醒我不做擁擠的交易，因為市場大部分人是虧錢的，可以適時思考反向或觀望策略！
+5. 現在偏向突破、假突破、反轉還是整理
 
 我的交易市場：［加密貨幣市場］
 我的交易風格：［波段 / 趨勢］
@@ -256,13 +274,13 @@ def generate_ai_report(ta_string, ct_analysis_str, transcript_text, macro_news_s
 【特別任務：整合 TiaBTC 觀點】
 {task_prompt}
 
-⚠️ **核心提醒**：即使 TiaBTC 觀點抓取失敗、甚至沒有 Cointelegraph 觀點，你也必須堅持頂級技術分析師的專業態度，根據【資料一：幣安 4H 技術數據】提供完整的 5 個幣種技術面與行情分析，絕對不能省略或不寫。
+⚠️ **核心提醒**：即使 TiaBTC 觀點抓取失敗、甚至沒有 Cointelegraph 觀點，你也必須堅持頂級技術分析師的專業態度，根據【資料一：幣安 4H 技術數據】提供完整的 5 個幣種技術面、資金費率分析與行情策略，絕對不能省略或不寫。
 
 請融合以上所有資料，嚴格按照我的交易風格，撰寫一份「極度精簡、排版精美且具備高實戰價值」的 Discord 晨報。請善用 Markdown 格式（如粗體、區塊引用、列表）來增加易讀性，並在適當的地方加入各種相關 Emoji（如 📈、📉、💡、🎯、⚠️、🔥、💎、📊）來視覺引導：
-1. 【宏觀定調】：一句話結合「國際經濟局勢」與「技術面」，定調今天的市場總結。
+1. 【宏觀定調】：一句話結合「國際經濟局勢」、「技術面」與「多空擁擠度（資金費率）」，定調今天的市場總結。
 2. 5 個幣種的分析，每個幣種【只保留兩個欄位】：
    - **現價**: 直接標註於幣種名稱旁。
-   - **趨勢與型態**: 用一句話總結目前的盤面強弱與型態結構。絕對不要羅列生硬的技術數據！除非某個數據是支撐你策略的「前三大核心依據」，否則一律省略。
+   - **趨勢與型態**: 用一句話總結目前的盤面強弱、型態結構，並特別指出資金費率是否呈現擁擠交易（若是過高過低則警示反轉或調整）。
    - **行動指南**: 直接給出『建議入場價位與必須確認的價格行為』、『預期止盈與止損價位』、『高機率劇本』。
 3. 【TiaBTC 觀點速遞】：請優先以 TiaBTC 的觀點（無論是字幕提供、或是你搜尋到的分析）進行 1-3 點條列式精簡總結。若有必要，再將 Cointelegraph 的頂級機構觀點作為背景與補充。
 4. 語氣果斷專業、像個身經百戰的操盤手。直接輸出純文本，不要加上 ``` 區塊包裝，總字數控制在 1500 字以內。
