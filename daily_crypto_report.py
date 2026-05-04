@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import datetime
 import time
+import re
 
 # ==========================================
 # 💎 激進波段分析師 - 每日晨報機器人 (GitHub Actions 版)
@@ -20,7 +21,7 @@ DATA_DIR = "data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-def get_binance_klines(symbol, interval, limit=100):
+def get_binance_klines(symbol, interval, limit=240):
     """從幣安 API 獲取真實 K 線數據，並自動處理 GitHub Actions 的 IP 阻擋問題"""
     endpoints = [
         "https://api.binance.com/api/v3/klines",
@@ -147,6 +148,19 @@ def generate_analysis(symbol):
     
     return report
 
+def get_latest_tiabtc_video():
+    """從 YouTube 抓取 @tiabtc 最新影片連結"""
+    try:
+        url = "https://www.youtube.com/@tiabtc/videos"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        html = requests.get(url, headers=headers, timeout=10).text
+        vid_match = re.search(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+        if vid_match:
+            return f"https://www.youtube.com/watch?v={vid_match.group(1)}"
+        return "https://www.youtube.com/@tiabtc"
+    except:
+        return "https://www.youtube.com/@tiabtc"
+
 def send_to_discord(content):
     if not WEBHOOK_URL or WEBHOOK_URL == "YOUR_DISCORD_WEBHOOK_URL":
         print(content)
@@ -174,5 +188,9 @@ if __name__ == "__main__":
             final_msg += generate_analysis(sym)
         except Exception as e:
             final_msg += f"### 【{sym}】\n讀取數據失敗: {e}\n\n"
+            
+    # 加入 tiabtc 最新影片參考
+    yt_link = get_latest_tiabtc_video()
+    final_msg += f"---\n📺 **【提阿非羅大人 TiaBTC】最新盤勢觀點**\n> 每次分析別忘了參考頻道的最新看法：\n{yt_link}\n"
             
     send_to_discord(final_msg)
