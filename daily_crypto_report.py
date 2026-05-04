@@ -6,6 +6,7 @@ import time
 import re
 import google.generativeai as genai
 import xml.etree.ElementTree as ET
+from youtube_transcript_api import YouTubeTranscriptApi
 
 # ==========================================
 # 💎 激進波段分析師 - 每日晨報機器人 (AI 升級版)
@@ -130,6 +131,39 @@ def get_cointelegraph_analysis():
         print(f"Cointelegraph 讀取失敗: {e}")
         return "暫無最新機構分析"
 
+def get_tiabtc_transcript():
+    """嘗試獲取 TiaBTC 最新影片的字幕。若無字幕則回傳空字串。"""
+    try:
+        url = "https://www.youtube.com/feeds/videos.xml?channel_id=UCy2h-yNK9OF1kXDtT3AlF3Q"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        res = requests.get(url, headers=headers, timeout=10)
+        root = ET.fromstring(res.content)
+        
+        ns = {'yt': 'http://www.youtube.com/xml/schemas/2015', 'atom': 'http://www.w3.org/2005/Atom'}
+        vids = []
+        for entry in root.findall('atom:entry', ns)[:3]:
+            vid_elem = entry.find('yt:videoId', ns)
+            if vid_elem is not None and vid_elem.text:
+                vids.append(vid_elem.text)
+                
+        for vid in vids:
+            try:
+                transcript_list = YouTubeTranscriptApi.list_transcripts(vid)
+                transcript = next(iter(transcript_list))
+                if 'zh' not in transcript.language_code:
+                    transcript = transcript.translate('zh-Hant')
+                res = transcript.fetch()
+                text = " ".join([t['text'] for t in res])
+                print(f"字幕抓取成功 ({vid})！語言: {transcript.language_code}")
+                return text[:25000]
+            except Exception as e:
+                print(f"字幕抓取失敗 ({vid}): {e}")
+                continue
+    except Exception as e:
+        print(f"取得頻道 RSS 失敗: {e}")
+        
+    return ""
+
 def get_macro_news():
     """抓取最新的總體經濟與國際局勢新聞標題 (CNBC RSS)"""
     urls = [
@@ -156,7 +190,7 @@ def get_macro_news():
         return "暫無重大國際總經新聞"
     return "\n\n".join(news_items)
 
-def generate_ai_report(ta_string, ct_analysis_str, macro_news_str):
+def generate_ai_report(ta_string, ct_analysis_str, transcript_text, macro_news_str):
     if not GEMINI_API_KEY:
         return "⚠️ 未設定 GEMINI_API_KEY，請至 GitHub Secrets 設定。\n\n" + ta_string
         
@@ -187,6 +221,14 @@ def generate_ai_report(ta_string, ct_analysis_str, macro_news_str):
             
         # GenerativeModel 參數通常不需要 "models/" 前綴
         model_name = target_model.replace("models/", "")
+        
+        if transcript_text:
+            tiabtc_source = f"【資料四：TiaBTC 最新影片字幕】\n{transcript_text}"
+            task_prompt = "請優先根據這份字幕提取 TiaBTC 最新影片的分析重點。如果有字幕，請以字幕為主。"
+        else:
+            tiabtc_source = ""
+            task_prompt = "因為今天無法擷取到 TiaBTC 影片字幕，我已為你啟動了 Google 聯網搜尋引擎！請立刻搜尋「TiaBTC 最新分析」獲取他過去 24 小時的最新觀點。"
+            
         prompt = f"""
 請扮演一位專業技術分析師。每天固定從trading view (或幣安) 上撈取BTC ETH SOL BNB ADA k線數據，並從以下角度進行嚴格判斷：
 1. 趨勢方向與型態結構
@@ -209,8 +251,10 @@ def generate_ai_report(ta_string, ct_analysis_str, macro_news_str):
 【資料三：全球頂級機構與分析師觀點 (Cointelegraph)】
 {ct_analysis_str}
 
-【特別任務：聯網搜尋 TiaBTC 觀點】
-我已賦予你 Google 聯網搜尋的能力！請你立刻在網路上搜尋「TiaBTC 最新分析」或「提阿非羅大人 Twitter」獲取他過去 24 小時的最新盤勢觀點。
+{tiabtc_source}
+
+【特別任務：整合 TiaBTC 觀點】
+{task_prompt}
 
 請融合以上所有資料，嚴格按照我的交易風格，撰寫一份「極度精簡、排版精美且具備高實戰價值」的 Discord 晨報。請善用 Markdown 格式（如粗體、區塊引用、列表）來增加易讀性，並在適當的地方加入各種相關 Emoji（如 📈、📉、💡、🎯、⚠️、🔥、💎、📊）來視覺引導：
 1. 【宏觀定調】：一句話結合「國際經濟局勢」與「技術面」，定調今天的市場總結。
@@ -218,7 +262,7 @@ def generate_ai_report(ta_string, ct_analysis_str, macro_news_str):
    - **現價**: 直接標註於幣種名稱旁。
    - **趨勢與型態**: 用一句話總結目前的盤面強弱與型態結構。絕對不要羅列生硬的技術數據！除非某個數據是支撐你策略的「前三大核心依據」，否則一律省略。
    - **行動指南**: 直接給出『建議入場價位與必須確認的價格行為』、『預期止盈與止損價位』、『高機率劇本』。
-3. 【TiaBTC 觀點速遞】：請優先以你搜尋到的 TiaBTC 最新觀點（包含他在 YouTube 與 Twitter 的分析）進行總結。若有必要，再將 Cointelegraph 機構觀點作為背景與補充資訊，用 1-3 點條列式，精簡提煉盤勢重點。
+3. 【TiaBTC 觀點速遞】：請優先以 TiaBTC 的觀點（無論是字幕提供、或是你搜尋到的分析）進行 1-3 點條列式精簡總結。若有必要，再將 Cointelegraph 的頂級機構觀點作為背景與補充。
 4. 語氣果斷專業、像個身經百戰的操盤手。直接輸出純文本，不要加上 ``` 區塊包裝，總字數控制在 1500 字以內。
 """
         try:
@@ -295,7 +339,8 @@ if __name__ == "__main__":
             ta_full_string += f"[{sym}] 讀取失敗: {e}\n\n"
             
     ct_analysis = get_cointelegraph_analysis()
+    tiabtc_transcript = get_tiabtc_transcript()
     macro_news = get_macro_news()
     
-    final_report = generate_ai_report(ta_full_string, ct_analysis, macro_news)
+    final_report = generate_ai_report(ta_full_string, ct_analysis, tiabtc_transcript, macro_news)
     send_to_discord(final_report)
