@@ -114,7 +114,7 @@ def get_ta_raw_data(symbol):
 def get_latest_tiabtc_video_info():
     """回傳最新的前 5 個影片 ID 列表 (透過 RSS 確保不被擋)"""
     try:
-        url = "https://www.youtube.com/feeds/videos.xml?channel_id=UCkMhW4j57j3mKzH1t-Z9m4g"
+        url = "https://www.youtube.com/feeds/videos.xml?channel_id=UCy2h-yNK9OF1kXDtT3AlF3Q"
         headers = {'User-Agent': 'Mozilla/5.0'}
         res = requests.get(url, headers=headers, timeout=10)
         root = ET.fromstring(res.content)
