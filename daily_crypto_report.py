@@ -111,35 +111,39 @@ def get_ta_raw_data(symbol):
     return data_str
 
 def get_latest_tiabtc_video_info():
-    """回傳 (video_id, video_url)"""
+    """回傳最新的前 5 個影片 ID 列表"""
     try:
         url = "https://www.youtube.com/@tiabtc/videos"
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
         html = requests.get(url, headers=headers, timeout=10).text
-        vid_match = re.search(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
-        if vid_match:
-            vid = vid_match.group(1)
-            return vid, f"https://www.youtube.com/watch?v={vid}"
-        return None, "https://www.youtube.com/@tiabtc"
+        vids = re.findall(r'"videoId":"([a-zA-Z0-9_-]{11})"', html)
+        unique_vids = []
+        for v in vids:
+            if v not in unique_vids:
+                unique_vids.append(v)
+        return unique_vids[:5]
     except:
-        return None, "https://www.youtube.com/@tiabtc"
+        return []
 
-def get_video_transcript(video_id):
-    if not video_id:
+def get_video_transcript(vid_list):
+    if not vid_list:
         return "無影片 ID，無法擷取字幕。"
-    try:
-        # 優先抓取中文，若無則抓英文並自動翻譯成繁中
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+        
+    for vid in vid_list:
         try:
-            transcript = transcript_list.find_transcript(['zh-TW', 'zh-HK', 'zh', 'zh-Hans', 'zh-CN'])
-        except:
-            transcript = transcript_list.find_transcript(['en']).translate('zh-Hant')
+            transcript_list = YouTubeTranscriptApi.list_transcripts(vid)
+            try:
+                transcript = transcript_list.find_transcript(['zh-TW', 'zh-HK', 'zh', 'zh-Hans', 'zh-CN'])
+            except:
+                transcript = transcript_list.find_transcript(['en']).translate('zh-Hant')
+                
+            res = transcript.fetch()
+            text = " ".join([t['text'] for t in res])
+            return text[:30000] # 找到字幕就直接回傳
+        except Exception:
+            continue
             
-        res = transcript.fetch()
-        text = " ".join([t['text'] for t in res])
-        return text[:30000] # 截斷避免過長
-    except Exception as e:
-        return f"無法擷取影片字幕 (可能無 CC 字幕)。錯誤: {e}"
+    return "無法擷取近期影片字幕 (可能是最新影片尚未產生 CC 字幕，或 GitHub Actions IP 遭阻擋)。"
 
 def get_macro_news():
     """抓取最新的總體經濟與國際局勢新聞標題 (CNBC RSS)"""
@@ -273,9 +277,10 @@ if __name__ == "__main__":
         except Exception as e:
             ta_full_string += f"[{sym}] 讀取失敗: {e}\n\n"
             
-    vid, v_url = get_latest_tiabtc_video_info()
-    transcript = get_video_transcript(vid)
+    vids = get_latest_tiabtc_video_info()
+    transcript = get_video_transcript(vids)
     macro_news = get_macro_news()
     
-    final_report = generate_ai_report(ta_full_string, transcript, macro_news, v_url)
+    # 由於我們不再附上影片連結，隨便傳一個空字串即可
+    final_report = generate_ai_report(ta_full_string, transcript, macro_news, "")
     send_to_discord(final_report)
