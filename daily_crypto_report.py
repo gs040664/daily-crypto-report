@@ -227,36 +227,36 @@ def generate_ai_report(ta_string, ct_analysis_str, macro_news_str):
             model = genai.GenerativeModel(model_name, tools='google_search_retrieval')
             
             response = None
-            for retry in range(3):
+            for retry in range(5):
                 try:
                     response = model.generate_content(prompt)
                     break
                 except Exception as e:
                     if "429" in str(e) or "quota" in str(e).lower():
-                        print(f"⚠️ 觸發 429 速率限制，等待 42 秒後自動重試 (第 {retry+1} 次/共 3 次)...")
-                        time.sleep(42)
+                        print(f"⚠️ 觸發 429 速率限制，等待 61 秒後自動重試 (第 {retry+1} 次/共 5 次)...")
+                        time.sleep(61)
                     else:
                         raise e
             if response is None:
-                raise Exception("重試 3 次速率限制後依然無法取得回應")
+                raise Exception("重試 5 次速率限制後依然無法取得回應")
                         
         except Exception as search_err:
             print(f"無法啟用 Google 搜尋工具 ({search_err})，退回無搜尋模式...")
             model = genai.GenerativeModel(model_name)
             
             response = None
-            for retry in range(3):
+            for retry in range(5):
                 try:
                     response = model.generate_content(prompt)
                     break
                 except Exception as e:
                     if "429" in str(e) or "quota" in str(e).lower():
-                        print(f"⚠️ 觸發 429 速率限制，等待 42 秒後自動重試 (第 {retry+1} 次/共 3 次)...")
-                        time.sleep(42)
+                        print(f"⚠️ 觸發 429 速率限制，等待 61 秒後自動重試 (第 {retry+1} 次/共 5 次)...")
+                        time.sleep(61)
                     else:
                         raise e
             if response is None:
-                raise Exception("無搜尋模式重試 3 次速率限制後依然無法取得回應")
+                raise Exception("無搜尋模式重試 5 次速率限制後依然無法取得回應")
                         
         return response.text
     except Exception as e:
