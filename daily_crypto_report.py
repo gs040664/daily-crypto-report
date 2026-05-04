@@ -285,10 +285,14 @@ def generate_ai_report(ta_string, ct_analysis_str, transcript_text, macro_news_s
 3. 【TiaBTC 觀點速遞】：請優先以 TiaBTC 的觀點（無論是字幕提供、或是你搜尋到的分析）進行 1-3 點條列式精簡總結。若有必要，再將 Cointelegraph 的頂級機構觀點作為背景與補充。
 4. 語氣果斷專業、像個身經百戰的操盤手。直接輸出純文本，不要加上 ``` 區塊包裝，總字數控制在 1500 字以內。
 """
+        use_search = False if transcript_text else True
         try:
-            # 嘗試使用內建的 Google 搜尋功能 (Grounding)
-            print("嘗試啟用 Gemini Google 搜尋引擎...")
-            model = genai.GenerativeModel(model_name, tools='google_search_retrieval')
+            if use_search:
+                print("嘗試啟用 Gemini Google 搜尋引擎...")
+                model = genai.GenerativeModel(model_name, tools='google_search_retrieval')
+            else:
+                print("使用已擷取的字幕數據，停用搜尋引擎以節省 Quota...")
+                model = genai.GenerativeModel(model_name)
             
             response = None
             for retry in range(2):
@@ -305,26 +309,34 @@ def generate_ai_report(ta_string, ct_analysis_str, transcript_text, macro_news_s
                 raise Exception("重試 2 次速率限制後依然無法取得回應")
                         
         except Exception as search_err:
-            print(f"無法啟用 Google 搜尋工具 ({search_err})，退回無搜尋模式...")
-            model = genai.GenerativeModel(model_name)
-            
-            response = None
-            for retry in range(2):
-                try:
-                    response = model.generate_content(prompt)
-                    break
-                except Exception as e:
-                    if "429" in str(e) or "quota" in str(e).lower():
-                        print(f"⚠️ 觸發 429 速率限制，等待 31 秒後自動重試 (第 {retry+1} 次/共 2 次)...")
-                        time.sleep(31)
-                    else:
-                        raise e
-            if response is None:
-                raise Exception("無搜尋模式重試 2 次速率限制後依然無法取得回應")
+            if use_search:
+                print(f"無法啟用 Google 搜尋工具 ({search_err})，退回無搜尋模式...")
+                model = genai.GenerativeModel(model_name)
+                
+                response = None
+                for retry in range(2):
+                    try:
+                        response = model.generate_content(prompt)
+                        break
+                    except Exception as e:
+                        if "429" in str(e) or "quota" in str(e).lower():
+                            print(f"⚠️ 觸發 429 速率限制，等待 31 秒後自動重試 (第 {retry+1} 次/共 2 次)...")
+                            time.sleep(31)
+                        else:
+                            raise e
+                if response is None:
+                    raise Exception("無搜尋模式重試 2 次速率限制後依然無法取得回應")
+            else:
+                raise search_err
                         
         return response.text
     except Exception as e:
-        return f"⚠️ AI 生成失敗 ({e})\n\n純技術數據：\n{ta_string}"
+        return (
+            f"⚠️ **AI 核心服務暫時受限**\n"
+            f"原因：您的 Gemini API Key 超出官方今日或每分鐘的請求額度（429 Quota Exceeded），或者 API 金鑰暫時遭到拒絕。此時 Google 的 AI 服務完全拒絕處理任何對話或分析請求，因此暫時無法為您生成專家解析。\n\n"
+            f"待額度重置後，系統將自動恢復專家策略晨報。以下為當前最新的盤勢技術數據供您參考：\n"
+            f"```text\n{ta_string}\n```"
+        )
 
 def send_to_discord(content):
     if not WEBHOOK_URL or WEBHOOK_URL == "YOUR_DISCORD_WEBHOOK_URL":
