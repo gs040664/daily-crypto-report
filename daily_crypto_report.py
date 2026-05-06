@@ -3,6 +3,10 @@ import requests
 import pandas as pd
 import datetime
 import time
+import json
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
 # ==========================================
 # 💎 Crypto TA Data Fetcher
@@ -144,6 +148,38 @@ def fetch_and_save_ta_data(symbol):
         print("最新資金費率: 暫無資料")
     print(f"✓ {symbol} 歷史資料已儲存更新。\n")
 
+def upload_to_gdrive(file_path, folder_id, credentials_json_str):
+    try:
+        credentials_info = json.loads(credentials_json_str)
+        creds = service_account.Credentials.from_service_account_info(
+            credentials_info, scopes=['https://www.googleapis.com/auth/drive.file']
+        )
+        service = build('drive', 'v3', credentials=creds)
+        
+        file_name = os.path.basename(file_path)
+        
+        # Check if file exists in folder
+        query = f"name='{file_name}' and '{folder_id}' in parents and trashed=false"
+        results = service.files().list(q=query, fields="files(id)").execute()
+        items = results.get('files', [])
+        
+        media = MediaFileUpload(file_path, resumable=True)
+        if items:
+            # Update existing file
+            file_id = items[0]['id']
+            service.files().update(fileId=file_id, media_body=media).execute()
+            print(f"✓ 已更新 Google Drive 檔案: {file_name}")
+        else:
+            # Create new file
+            file_metadata = {
+                'name': file_name,
+                'parents': [folder_id]
+            }
+            service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+            print(f"✓ 已上傳新檔案至 Google Drive: {file_name}")
+    except Exception as e:
+        print(f"上傳 Google Drive 失敗 ({file_path}): {e}")
+
 if __name__ == "__main__":
     for sym in SYMBOLS:
         try:
@@ -151,3 +187,14 @@ if __name__ == "__main__":
             time.sleep(1)
         except Exception as e:
             print(f"[{sym}] 讀取失敗: {e}\n")
+
+    # Upload to Google Drive if credentials exist
+    gdrive_json = os.environ.get("GDRIVE_SERVICE_ACCOUNT_JSON")
+    gdrive_folder_id = os.environ.get("GDRIVE_FOLDER_ID")
+    
+    if gdrive_json and gdrive_folder_id:
+        print("\n--- 開始上傳至 Google Drive ---")
+        for sym in SYMBOLS:
+            file_path = os.path.join(DATA_DIR, f"{sym}_{INTERVAL}_history.csv")
+            if os.path.exists(file_path):
+                upload_to_gdrive(file_path, gdrive_folder_id, gdrive_json)

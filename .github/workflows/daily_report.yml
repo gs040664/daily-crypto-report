@@ -30,6 +30,9 @@ jobs:
           pip install -r requirements.txt
           
       - name: Run Crypto Report
+        env:
+          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
         run: python daily_crypto_report.py
         
       - name: Commit and Push Data Updates
