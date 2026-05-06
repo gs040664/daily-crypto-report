@@ -31,8 +31,8 @@ jobs:
           
       - name: Run Crypto Report
         env:
-          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
-          GDRIVE_FOLDER_ID: ${{ secrets.GDRIVE_FOLDER_ID }}
+          GDRIVE_WEBAPP_URL: ${{ secrets.GDRIVE_WEBAPP_URL }}
+          GDRIVE_WEBAPP_TOKEN: ${{ secrets.GDRIVE_WEBAPP_TOKEN }}
         run: python daily_crypto_report.py
         
       - name: Commit and Push Data Updates

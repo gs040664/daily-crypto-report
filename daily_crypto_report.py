@@ -3,10 +3,6 @@ import requests
 import pandas as pd
 import datetime
 import time
-import json
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
 
 # ==========================================
 # 💎 Crypto TA Data Fetcher
@@ -49,7 +45,6 @@ def get_binance_klines(symbol, interval, limit=240):
 
 def get_historical_funding_rates(symbol, start_time, end_time):
     url = f"https://fapi.binance.com/fapi/v1/fundingRate"
-    # 每次請求最多 1000 筆，40天的 8 小時資金費率約 120 筆，絕對足夠
     params = {"symbol": symbol, "startTime": start_time, "endTime": end_time, "limit": 1000}
     try:
         response = requests.get(url, params=params, timeout=10)
@@ -84,7 +79,6 @@ def calculate_indicators(symbol, df):
     df['vol_avg_20'] = df['volume'].rolling(window=20).mean()
     df['vol_ratio'] = df['volume'] / df['vol_avg_20']
     
-    # 計算每個時間點過去 240 根 K 線的 POC (若無 240 根則取所有已有的)
     poc_series = []
     window = 240
     for i in range(len(df)):
@@ -101,7 +95,6 @@ def calculate_indicators(symbol, df):
             poc_series.append(df['close'].iloc[i])
     df['POC'] = poc_series
     
-    # 取得與 K 線時間維度一致的資金費率
     start_time = int(df['time'].iloc[0])
     end_time = int(df['time'].iloc[-1])
     df_fr = get_historical_funding_rates(symbol, start_time, end_time)
@@ -129,7 +122,6 @@ def save_data_to_csv(symbol, df):
     combined_df.to_csv(file_path, index=False)
 
 def get_binance_funding_rate(symbol):
-    """獲取幣安合約即時資金費率 (Fallback 用)"""
     url = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol}"
     try:
         response = requests.get(url, timeout=10)
@@ -141,9 +133,8 @@ def get_binance_funding_rate(symbol):
     return None
 
 def fetch_and_save_ta_data(symbol):
-    """獲取純技術指標字串與 POC 等，並印出及存檔"""
     print(f"--- 處理 {symbol} ---")
-    df = get_binance_klines(symbol, INTERVAL, limit=240) # 強制回歸 240 (40天) 時間維度
+    df = get_binance_klines(symbol, INTERVAL, limit=240)
     df = calculate_indicators(symbol, df)
     save_data_to_csv(symbol, df)
     
@@ -155,7 +146,6 @@ def fetch_and_save_ta_data(symbol):
     print(f"當前量能對比均量: {current['vol_ratio']:.2f}倍")
     print(f"交易密集區間 (POC): 約 {current['POC']:.4f}")
     
-    # 優先從歷史數據抓，若無則抓即時的
     funding_val = current.get('fundingRate')
     if pd.isna(funding_val):
         funding_val = get_binance_funding_rate(symbol)
@@ -166,40 +156,23 @@ def fetch_and_save_ta_data(symbol):
         print("最新資金費率: 暫無資料")
     print(f"✓ {symbol} 歷史資料已儲存更新。\n")
 
-def upload_to_gdrive(file_path, folder_id, credentials_json_str):
+def upload_to_gdrive_proxy(file_path, webapp_url, token):
+    """透過 Google Apps Script 網頁程式上傳檔案 (繞過 0GB 配額限制)"""
     try:
-        credentials_info = json.loads(credentials_json_str)
-        creds = service_account.Credentials.from_service_account_info(
-            credentials_info, scopes=['https://www.googleapis.com/auth/drive.file']
-        )
-        service = build('drive', 'v3', credentials=creds)
-        
         file_name = os.path.basename(file_path)
+        with open(file_path, 'rb') as f:
+            content = f.read()
         
-        # Check if file exists in folder
-        query = f"name='{file_name}' and '{folder_id}' in parents and trashed=false"
-        results = service.files().list(q=query, fields="files(id)", supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
-        items = results.get('files', [])
+        # 將檔案內容透過 POST 傳送給 Google Apps Script
+        upload_url = f"{webapp_url}?filename={file_name}&token={token}"
+        response = requests.post(upload_url, data=content, timeout=30)
         
-        media = MediaFileUpload(file_path, resumable=True)
-        if items:
-            # Update existing file
-            file_id = items[0]['id']
-            service.files().update(fileId=file_id, media_body=media, supportsAllDrives=True).execute()
-            print(f"✓ 已更新 Google Drive 檔案: {file_name}")
+        if response.text == "Success":
+            print(f"✓ 已成功透過 Proxy 上傳至 Google Drive: {file_name}")
         else:
-            # Create new file
-            file_metadata = {
-                'name': file_name,
-                'parents': [folder_id]
-            }
-            service.files().create(body=file_metadata, media_body=media, fields='id', supportsAllDrives=True).execute()
-            print(f"✓ 已上傳新檔案至 Google Drive: {file_name}")
+            print(f"上傳失敗，Google 腳本回傳: {response.text}")
     except Exception as e:
-        if "storageQuotaExceeded" in str(e):
-            print(f"上傳失敗: Google 服務帳戶在個人雲端硬碟中沒有空間配額。請嘗試將目標資料夾建立在「共用雲端硬碟 (Shared Drive)」中，或改用 OAuth2 授權。")
-        else:
-            print(f"上傳 Google Drive 失敗 ({file_path}): {e}")
+        print(f"Proxy 上傳過程發生錯誤: {e}")
 
 if __name__ == "__main__":
     for sym in SYMBOLS:
@@ -209,13 +182,13 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"[{sym}] 讀取失敗: {e}\n")
 
-    # Upload to Google Drive if credentials exist
-    gdrive_json = os.environ.get("GDRIVE_SERVICE_ACCOUNT_JSON")
-    gdrive_folder_id = os.environ.get("GDRIVE_FOLDER_ID")
+    # 檢查是否有設定 GAS 中轉站網址與密鑰
+    webapp_url = os.environ.get("GDRIVE_WEBAPP_URL")
+    webapp_token = os.environ.get("GDRIVE_WEBAPP_TOKEN")
     
-    if gdrive_json and gdrive_folder_id:
-        print("\n--- 開始上傳至 Google Drive ---")
+    if webapp_url and webapp_token:
+        print("\n--- 開始透過 Proxy 上傳至 Google Drive ---")
         for sym in SYMBOLS:
             file_path = os.path.join(DATA_DIR, f"{sym}_{INTERVAL}_history.csv")
             if os.path.exists(file_path):
-                upload_to_gdrive(file_path, gdrive_folder_id, gdrive_json)
+                upload_to_gdrive_proxy(file_path, webapp_url, webapp_token)
