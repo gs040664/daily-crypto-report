@@ -15,7 +15,7 @@ DATA_DIR = "data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-def get_binance_klines(symbol, interval, limit=1000):
+def get_binance_klines(symbol, interval, limit=240):
     endpoints = [
         "https://api.binance.com/api/v3/klines",
         "https://data-api.binance.vision/api/v3/klines"
@@ -43,18 +43,20 @@ def get_binance_klines(symbol, interval, limit=1000):
     df['volume'] = df['volume'].astype(float)
     return df
 
-def get_historical_funding_rates(symbol, limit=1000):
+def get_historical_funding_rates(symbol, start_time, end_time):
     url = f"https://fapi.binance.com/fapi/v1/fundingRate"
-    params = {"symbol": symbol, "limit": limit}
+    # 每次請求最多 1000 筆，40天的 8 小時資金費率約 120 筆，絕對足夠
+    params = {"symbol": symbol, "startTime": start_time, "endTime": end_time, "limit": 1000}
     try:
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
         if isinstance(data, list):
             df_fr = pd.DataFrame(data)
-            df_fr['fundingTime'] = pd.to_numeric(df_fr['fundingTime'])
-            df_fr['fundingRate'] = pd.to_numeric(df_fr['fundingRate'])
-            df_fr = df_fr.sort_values('fundingTime')
-            return df_fr[['fundingTime', 'fundingRate']]
+            if not df_fr.empty:
+                df_fr['fundingTime'] = pd.to_numeric(df_fr['fundingTime'])
+                df_fr['fundingRate'] = pd.to_numeric(df_fr['fundingRate'])
+                df_fr = df_fr.sort_values('fundingTime')
+                return df_fr[['fundingTime', 'fundingRate']]
     except Exception as e:
         print(f"無法取得 {symbol} 歷史資金費率: {e}")
     return pd.DataFrame()
@@ -78,7 +80,7 @@ def calculate_indicators(symbol, df):
     df['vol_avg_20'] = df['volume'].rolling(window=20).mean()
     df['vol_ratio'] = df['volume'] / df['vol_avg_20']
     
-    # 計算每個時間點過去 240 根 K 線的 POC (交易密集區間)
+    # 計算每個時間點過去 240 根 K 線的 POC (若無 240 根則取所有已有的)
     poc_series = []
     window = 240
     for i in range(len(df)):
@@ -95,7 +97,11 @@ def calculate_indicators(symbol, df):
             poc_series.append(df['close'].iloc[i])
     df['POC'] = poc_series
     
-    df_fr = get_historical_funding_rates(symbol, limit=1000)
+    # 取得與 K 線時間維度一致的資金費率
+    start_time = int(df['time'].iloc[0])
+    end_time = int(df['time'].iloc[-1])
+    df_fr = get_historical_funding_rates(symbol, start_time, end_time)
+    
     if not df_fr.empty:
         df = df.sort_values('time')
         df = pd.merge_asof(df, df_fr, left_on='time', right_on='fundingTime', direction='backward')
@@ -121,7 +127,7 @@ def save_data_to_csv(symbol, df):
 def fetch_and_save_ta_data(symbol):
     """獲取純技術指標字串與 POC 等，並印出及存檔"""
     print(f"--- 處理 {symbol} ---")
-    df = get_binance_klines(symbol, INTERVAL, limit=1000)
+    df = get_binance_klines(symbol, INTERVAL, limit=240) # 強制回歸 240 (40天) 時間維度
     df = calculate_indicators(symbol, df)
     save_data_to_csv(symbol, df)
     
