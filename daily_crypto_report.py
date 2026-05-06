@@ -128,6 +128,18 @@ def save_data_to_csv(symbol, df):
         combined_df = save_df
     combined_df.to_csv(file_path, index=False)
 
+def get_binance_funding_rate(symbol):
+    """獲取幣安合約即時資金費率 (Fallback 用)"""
+    url = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol}"
+    try:
+        response = requests.get(url, timeout=10)
+        data = response.json()
+        if isinstance(data, dict) and 'lastFundingRate' in data:
+            return float(data['lastFundingRate'])
+    except:
+        pass
+    return None
+
 def fetch_and_save_ta_data(symbol):
     """獲取純技術指標字串與 POC 等，並印出及存檔"""
     print(f"--- 處理 {symbol} ---")
@@ -142,8 +154,14 @@ def fetch_and_save_ta_data(symbol):
     print(f"MACD柱狀圖: {current['Hist']:.4f}")
     print(f"當前量能對比均量: {current['vol_ratio']:.2f}倍")
     print(f"交易密集區間 (POC): 約 {current['POC']:.4f}")
-    if 'fundingRate' in current and pd.notnull(current['fundingRate']):
-        print(f"最新資金費率: {current['fundingRate'] * 100:.4f}%")
+    
+    # 優先從歷史數據抓，若無則抓即時的
+    funding_val = current.get('fundingRate')
+    if pd.isna(funding_val):
+        funding_val = get_binance_funding_rate(symbol)
+        
+    if funding_val is not None:
+        print(f"最新資金費率: {funding_val * 100:.4f}%")
     else:
         print("最新資金費率: 暫無資料")
     print(f"✓ {symbol} 歷史資料已儲存更新。\n")
@@ -160,14 +178,14 @@ def upload_to_gdrive(file_path, folder_id, credentials_json_str):
         
         # Check if file exists in folder
         query = f"name='{file_name}' and '{folder_id}' in parents and trashed=false"
-        results = service.files().list(q=query, fields="files(id)").execute()
+        results = service.files().list(q=query, fields="files(id)", supportsAllDrives=True, includeItemsFromAllDrives=True).execute()
         items = results.get('files', [])
         
         media = MediaFileUpload(file_path, resumable=True)
         if items:
             # Update existing file
             file_id = items[0]['id']
-            service.files().update(fileId=file_id, media_body=media).execute()
+            service.files().update(fileId=file_id, media_body=media, supportsAllDrives=True).execute()
             print(f"✓ 已更新 Google Drive 檔案: {file_name}")
         else:
             # Create new file
@@ -175,10 +193,13 @@ def upload_to_gdrive(file_path, folder_id, credentials_json_str):
                 'name': file_name,
                 'parents': [folder_id]
             }
-            service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+            service.files().create(body=file_metadata, media_body=media, fields='id', supportsAllDrives=True).execute()
             print(f"✓ 已上傳新檔案至 Google Drive: {file_name}")
     except Exception as e:
-        print(f"上傳 Google Drive 失敗 ({file_path}): {e}")
+        if "storageQuotaExceeded" in str(e):
+            print(f"上傳失敗: Google 服務帳戶在個人雲端硬碟中沒有空間配額。請嘗試將目標資料夾建立在「共用雲端硬碟 (Shared Drive)」中，或改用 OAuth2 授權。")
+        else:
+            print(f"上傳 Google Drive 失敗 ({file_path}): {e}")
 
 if __name__ == "__main__":
     for sym in SYMBOLS:
