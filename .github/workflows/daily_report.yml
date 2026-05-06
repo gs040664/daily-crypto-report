@@ -40,7 +40,7 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add data/
-          # 先拉取遠端變更，避免推播衝突
-          git pull --rebase origin main
+          # 先在本地 Commit，然後再拉取遠端變更進行 Rebase，最後才推播
           git commit -m "📈 Auto-update crypto history data [skip ci]" || echo "No data changes to commit"
+          git pull --rebase origin main
           git push origin main
