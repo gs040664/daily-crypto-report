@@ -15,7 +15,7 @@ DATA_DIR = "data"
 if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
-def get_binance_klines(symbol, interval, limit=240):
+def get_binance_klines(symbol, interval, limit=1000):
     endpoints = [
         "https://api.binance.com/api/v3/klines",
         "https://data-api.binance.vision/api/v3/klines"
@@ -43,7 +43,23 @@ def get_binance_klines(symbol, interval, limit=240):
     df['volume'] = df['volume'].astype(float)
     return df
 
-def calculate_indicators(df):
+def get_historical_funding_rates(symbol, limit=1000):
+    url = f"https://fapi.binance.com/fapi/v1/fundingRate"
+    params = {"symbol": symbol, "limit": limit}
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+        if isinstance(data, list):
+            df_fr = pd.DataFrame(data)
+            df_fr['fundingTime'] = pd.to_numeric(df_fr['fundingTime'])
+            df_fr['fundingRate'] = pd.to_numeric(df_fr['fundingRate'])
+            df_fr = df_fr.sort_values('fundingTime')
+            return df_fr[['fundingTime', 'fundingRate']]
+    except Exception as e:
+        print(f"無法取得 {symbol} 歷史資金費率: {e}")
+    return pd.DataFrame()
+
+def calculate_indicators(symbol, df):
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -58,11 +74,42 @@ def calculate_indicators(df):
     df['MACD'] = exp1 - exp2
     df['Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     df['Hist'] = df['MACD'] - df['Signal']
+    
+    df['vol_avg_20'] = df['volume'].rolling(window=20).mean()
+    df['vol_ratio'] = df['volume'] / df['vol_avg_20']
+    
+    # 計算每個時間點過去 240 根 K 線的 POC (交易密集區間)
+    poc_series = []
+    window = 240
+    for i in range(len(df)):
+        if i < 10:
+            poc_series.append(df['close'].iloc[i])
+            continue
+        start_idx = max(0, i - window + 1)
+        sub_df = df.iloc[start_idx:i+1]
+        sub_bins = pd.cut(sub_df['close'], bins=20)
+        vp = sub_df.groupby(sub_bins, observed=False)['volume'].sum()
+        if not vp.empty:
+            poc_series.append(vp.idxmax().mid)
+        else:
+            poc_series.append(df['close'].iloc[i])
+    df['POC'] = poc_series
+    
+    df_fr = get_historical_funding_rates(symbol, limit=1000)
+    if not df_fr.empty:
+        df = df.sort_values('time')
+        df = pd.merge_asof(df, df_fr, left_on='time', right_on='fundingTime', direction='backward')
+    else:
+        df['fundingRate'] = None
+        
     return df
 
 def save_data_to_csv(symbol, df):
     file_path = os.path.join(DATA_DIR, f"{symbol}_{INTERVAL}_history.csv")
-    save_df = df[['datetime', 'time', 'open', 'high', 'low', 'close', 'volume', 'EMA20', 'EMA50', 'RSI', 'MACD', 'Hist']].copy()
+    cols = ['datetime', 'time', 'open', 'high', 'low', 'close', 'volume', 'EMA20', 'EMA50', 'RSI', 'MACD', 'Hist', 'vol_ratio', 'POC', 'fundingRate']
+    cols = [c for c in cols if c in df.columns]
+    save_df = df[cols].copy()
+    
     if os.path.exists(file_path):
         old_df = pd.read_csv(file_path)
         combined_df = pd.concat([old_df, save_df]).drop_duplicates(subset=['time'], keep='last')
@@ -71,51 +118,24 @@ def save_data_to_csv(symbol, df):
         combined_df = save_df
     combined_df.to_csv(file_path, index=False)
 
-def get_binance_funding_rate(symbol):
-    """獲取幣安合約即時資金費率 (Funding Rate)"""
-    url = f"https://fapi.binance.com/fapi/v1/premiumIndex?symbol={symbol}"
-    try:
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        if isinstance(data, dict) and 'lastFundingRate' in data:
-            return float(data['lastFundingRate'])
-    except Exception as e:
-        print(f"無法取得 {symbol} 資金費率: {e}")
-    return None
-
 def fetch_and_save_ta_data(symbol):
     """獲取純技術指標字串與 POC 等，並印出及存檔"""
     print(f"--- 處理 {symbol} ---")
-    df = get_binance_klines(symbol, INTERVAL)
-    df = calculate_indicators(df)
+    df = get_binance_klines(symbol, INTERVAL, limit=1000)
+    df = calculate_indicators(symbol, df)
     save_data_to_csv(symbol, df)
     
     current = df.iloc[-1]
-    price = current['close']
-    rsi = current['RSI']
-    macd_hist = current['Hist']
-    ema20 = current['EMA20']
-    ema50 = current['EMA50']
-    vol_avg = df['volume'].rolling(20).mean().iloc[-1]
-    vol_ratio = current['volume'] / vol_avg if vol_avg > 0 else 1
-    
-    # 計算交易密集區間 (Point of Control - 近期最大籌碼換手區)
-    bins = pd.cut(df['close'], bins=20)
-    vp = df.groupby(bins, observed=False)['volume'].sum()
-    poc_bin = vp.idxmax()
-    poc_price = poc_bin.mid
-    
-    # 新增資金費率
-    funding_rate = get_binance_funding_rate(symbol)
-    funding_str = f"{funding_rate * 100:.4f}%" if funding_rate is not None else "暫無資料"
-    
-    print(f"現價: {price:.4f}")
-    print(f"EMA20: {ema20:.4f}, EMA50: {ema50:.4f}")
-    print(f"RSI(14): {rsi:.1f}")
-    print(f"MACD柱狀圖: {macd_hist:.4f}")
-    print(f"當前量能對比均量: {vol_ratio:.2f}倍")
-    print(f"交易密集區間 (POC): 約 {poc_price:.4f}")
-    print(f"即時資金費率: {funding_str}")
+    print(f"現價: {current['close']:.4f}")
+    print(f"EMA20: {current['EMA20']:.4f}, EMA50: {current['EMA50']:.4f}")
+    print(f"RSI(14): {current['RSI']:.1f}")
+    print(f"MACD柱狀圖: {current['Hist']:.4f}")
+    print(f"當前量能對比均量: {current['vol_ratio']:.2f}倍")
+    print(f"交易密集區間 (POC): 約 {current['POC']:.4f}")
+    if 'fundingRate' in current and pd.notnull(current['fundingRate']):
+        print(f"最新資金費率: {current['fundingRate'] * 100:.4f}%")
+    else:
+        print("最新資金費率: 暫無資料")
     print(f"✓ {symbol} 歷史資料已儲存更新。\n")
 
 if __name__ == "__main__":
